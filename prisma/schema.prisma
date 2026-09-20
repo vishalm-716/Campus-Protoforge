@@ -1,0 +1,359 @@
+// Campus ProtoForge — Prisma schema
+// SQLite for zero-config local dev; swap DATABASE_URL to Postgres for production.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------------------
+// Users & Org
+// ---------------------------------------------------------------------------
+
+model User {
+  id             String   @id @default(cuid())
+  email          String   @unique
+  passwordHash   String
+  name           String
+  role           String   @default("student") // student | faculty | admin
+  department     String?
+  year           Int?
+  avatar         String?
+  skills         String // JSON array of strings
+  preferredStack String?  @map("preferred_stack")
+  title          String?
+  bio            String?
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  challengesOwned         Challenge[]     @relation("ChallengeOwner")
+  teamsMemberOf           TeamMember[]    @relation("TeamMemberUser")
+  teamsMentoring          Team[]          @relation("TeamMentor")
+  artefactsUploaded       Artefact[]      @relation("ArtefactUploader")
+  feedbackGiven           Feedback[]      @relation("FeedbackFaculty")
+  agentLogs               AgentLog[]      @relation("AgentLogActor")
+  learningAssetsPublished LearningAsset[] @relation("LearningAssetPublisher")
+  registryDecisions       ExternalApi[]   @relation("ExternalApiReviewer")
+
+  @@map("users")
+}
+
+model Department {
+  id        String   @id @default(cuid())
+  name      String   @unique
+  code      String?
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@map("departments")
+}
+
+// ---------------------------------------------------------------------------
+// Challenges & Tracks
+// ---------------------------------------------------------------------------
+
+model Challenge {
+  id              String           @id @default(cuid())
+  title           String
+  rawDescription  String           @map("raw_description")
+  structuredBrief String?          @map("structured_brief") // JSON
+  domainTags      String           @default("[]") @map("domain_tags") // JSON array
+  courseTag       String?          @map("course_tag")
+  department      String?
+  difficulty      String           @default("intermediate") // beginner | intermediate | advanced
+  expectedImpact  String?          @map("expected_impact")
+  ownerId         String           @map("owner_user_id")
+  visibility      String           @default("public") // public | private
+  status          String           @default("open") // open | in_progress | completed | archived
+  briefStatus     String           @default("ai_draft") @map("brief_status") // ai_draft | approved
+  kind            String           @default("student_idea") // student_idea | official_course | lab | capstone
+  createdAt       DateTime         @default(now()) @map("created_at")
+  updatedAt       DateTime         @updatedAt @map("updated_at")
+
+  owner         User             @relation("ChallengeOwner", fields: [ownerId], references: [id])
+  tracks        PrototypeTrack[]
+  teams         Team[]
+  learningAssets LearningAsset[]
+
+  @@map("challenges")
+}
+
+model PrototypeTrack {
+  id             String      @id @default(cuid())
+  challengeId    String      @map("challenge_id")
+  level          String      @default("intermediate") // beginner | intermediate | advanced
+  syllabusLinks  String      @default("[]") @map("syllabus_links") // JSON array
+  skillTags      String      @default("[]") @map("skill_tags") // JSON array
+  createdByAgent Boolean     @default(false) @map("created_by_agent")
+  createdAt      DateTime    @default(now()) @map("created_at")
+
+  challenge  Challenge   @relation(fields: [challengeId], references: [id], onDelete: Cascade)
+  milestones Milestone[]
+  teams      Team[]
+
+  @@map("prototype_tracks")
+}
+
+model Milestone {
+  id               String       @id @default(cuid())
+  prototypeTrackId String       @map("prototype_track_id")
+  orderIndex       Int          @map("order_index")
+  title            String
+  description      String
+  checklistItems   String       @default("[]") @map("checklist_items") // JSON array of {label, done}
+  dueDate          DateTime?    @map("due_date")
+  status           String       @default("todo") // todo | in_progress | done
+  notes            String       @default("")
+  aiSuggestions    String       @default("[]") @map("ai_suggestions") // JSON array
+  createdAt        DateTime     @default(now()) @map("created_at")
+  updatedAt        DateTime     @updatedAt @map("updated_at")
+
+  prototypeTrack PrototypeTrack @relation(fields: [prototypeTrackId], references: [id], onDelete: Cascade)
+  artefacts      Artefact[]
+  feedbacks      Feedback[]
+  apiTestCases   ApiTestCase[]
+
+  @@map("milestones")
+}
+
+// ---------------------------------------------------------------------------
+// Teams, Artefacts, Feedback
+// ---------------------------------------------------------------------------
+
+model Team {
+  id               String         @id @default(cuid())
+  name             String
+  challengeId      String         @map("challenge_id")
+  prototypeTrackId String?        @map("prototype_track_id")
+  mentorId         String?        @map("mentor_user_id")
+  notes            String         @default("")
+  pitchDocs        String?        @map("pitch_docs") // JSON generated by Docs & Pitch agent
+  lastActivityAt   DateTime       @default(now()) @map("last_activity_at")
+  createdAt        DateTime       @default(now()) @map("created_at")
+  updatedAt        DateTime       @updatedAt @map("updated_at")
+
+  challenge       Challenge        @relation(fields: [challengeId], references: [id], onDelete: Cascade)
+  track           PrototypeTrack?  @relation(fields: [prototypeTrackId], references: [id])
+  mentor          User?            @relation("TeamMentor", fields: [mentorId], references: [id])
+  members         TeamMember[]
+  artefacts       Artefact[]
+  feedbacks       Feedback[]
+  externalApis    ExternalApi[]
+  apiTestCases    ApiTestCase[]
+  llmProviders    LlmProvider[]
+  agentToolStates AgentToolState[]
+
+  @@map("teams")
+}
+
+model TeamMember {
+  id     String @id @default(cuid())
+  teamId String @map("team_id")
+  userId String @map("user_id")
+  role   String @default("member") // member | lead
+
+  team Team @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  user User @relation("TeamMemberUser", fields: [userId], references: [id])
+
+  @@unique([teamId, userId])
+  @@map("team_members")
+}
+
+model Artefact {
+  id               String    @id @default(cuid())
+  teamId           String    @map("team_id")
+  milestoneId      String?   @map("milestone_id")
+  type             String    @default("other") // doc | code_repo | demo_video | slide | other
+  url              String
+  shortDescription String    @default("") @map("short_description")
+  uploaderId       String    @map("uploaded_by")
+  createdAt        DateTime  @default(now()) @map("created_at")
+
+  team      Team       @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  milestone Milestone? @relation(fields: [milestoneId], references: [id])
+  uploader  User       @relation("ArtefactUploader", fields: [uploaderId], references: [id])
+
+  @@map("artefacts")
+}
+
+model Feedback {
+  id           String    @id @default(cuid())
+  teamId       String    @map("team_id")
+  milestoneId  String?   @map("milestone_id")
+  facultyId    String    @map("faculty_user_id")
+  rubricScores String    @default("[]") @map("rubric_scores") // JSON
+  comments     String    @default("")
+  aiDraft      String?   @map("ai_draft") // JSON
+  finalised    Boolean   @default(false)
+  createdAt    DateTime  @default(now()) @map("created_at")
+  updatedAt    DateTime  @updatedAt @map("updated_at")
+
+  team      Team       @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  milestone Milestone? @relation(fields: [milestoneId], references: [id])
+  faculty   User       @relation("FeedbackFaculty", fields: [facultyId], references: [id])
+
+  @@map("feedbacks")
+}
+
+model LearningAsset {
+  id              String     @id @default(cuid())
+  challengeId     String?    @map("challenge_id")
+  teamId          String?    @map("team_id")
+  title           String
+  summary         String     @default("")
+  tags            String     @default("[]") // JSON array
+  publishedBy     String     @map("published_by")
+  createdAt       DateTime   @default(now()) @map("created_at")
+
+  challenge       Challenge? @relation(fields: [challengeId], references: [id])
+  publishedByUser User       @relation("LearningAssetPublisher", fields: [publishedBy], references: [id])
+
+  @@map("learning_assets")
+}
+
+// ---------------------------------------------------------------------------
+// Agents & LLM
+// ---------------------------------------------------------------------------
+
+model AgentLog {
+  id                String   @id @default(cuid())
+  relatedEntityType String   @map("related_entity_type")
+  relatedEntityId   String   @map("related_entity_id")
+  agentName         String   @map("agent_name")
+  actionType        String   @map("action_type")
+  payload           String   @default("{}") // JSON
+  actorId           String?  @map("actor_id")
+  createdAt         DateTime @default(now()) @map("created_at")
+
+  actor User? @relation("AgentLogActor", fields: [actorId], references: [id])
+
+  @@map("agent_logs")
+}
+
+model LlmProvider {
+  id        String   @id @default(cuid())
+  teamId    String?  @map("team_id") // null = platform-level
+  provider  String // openai | groq | mistral | gemini | xai
+  label     String   @default("")
+  apiKeyEnc String   @map("api_key_enc") // AES-256-GCM encrypted at rest
+  model     String
+  isDefault Boolean  @default(false)
+  agentScope String  @default("all") // all | structure | track | coach | feedback | docs
+  createdAt DateTime @default(now()) @map("created_at")
+
+  team Team? @relation(fields: [teamId], references: [id], onDelete: Cascade)
+
+  @@map("llm_providers")
+}
+
+model AgentConfig {
+  id           String   @id @default(cuid())
+  agentName    String   @map("agent_name") @unique
+  enabled      Boolean  @default(true)
+  maxAutonomy  String   @default("suggest") // suggest | act_with_review | act
+  systemPrompt String   @default("") @map("system_prompt")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  @@map("agent_configs")
+}
+
+model AgentTool {
+  id          String   @id @default(cuid())
+  name        String   @unique
+  description String   @default("")
+  schemaJson  String   @default("{}") @map("schema_json")
+  enabled     Boolean  @default(true)
+  kind        String   @default("internal") // internal | http | mcp (future)
+  config      String   @default("{}") // JSON
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  teamStates AgentToolState[]
+
+  @@map("agent_tools")
+}
+
+model AgentToolState {
+  id      String    @id @default(cuid())
+  teamId  String    @map("team_id")
+  toolId  String    @map("tool_id")
+  enabled Boolean   @default(true)
+
+  team Team      @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  tool AgentTool @relation(fields: [toolId], references: [id], onDelete: Cascade)
+
+  @@unique([teamId, toolId])
+  @@map("agent_tool_states")
+}
+
+// ---------------------------------------------------------------------------
+// External API Lab & Registry
+// ---------------------------------------------------------------------------
+
+model ExternalApi {
+  id                    String        @id @default(cuid())
+  teamId                String?       @map("team_id")
+  name                  String
+  baseUrl               String        @map("base_url")
+  description           String        @default("")
+  authType              String        @default("none") @map("auth_type") // none | api_key | bearer | basic
+  authConfig            String        @default("{}") @map("auth_config") // JSON — never stores raw secrets
+  exampleEndpoints      String        @default("[]") @map("example_endpoints") // JSON array
+  category              String        @default("utilities") // edtech | analytics | sports | utilities | other
+  tags                  String        @default("[]") // JSON array
+  docsUrl               String?       @map("docs_url")
+  repoUrl               String?       @map("repo_url")
+  isPublishedToRegistry Boolean       @default(false) @map("is_published_to_registry")
+  registryStatus        String        @default("draft") @map("registry_status") // draft | pending | approved | rejected
+  reviewedBy            String?       @map("reviewed_by")
+  reviewNote            String        @default("")
+  usageCount            Int           @default(0) @map("usage_count")
+  createdAt             DateTime      @default(now()) @map("created_at")
+  updatedAt             DateTime      @updatedAt @map("updated_at")
+
+  team           Team?         @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  reviewedByUser User?         @relation("ExternalApiReviewer", fields: [reviewedBy], references: [id])
+  testCases      ApiTestCase[]
+
+  @@map("external_apis")
+}
+
+model ApiTestCase {
+  id                  String    @id @default(cuid())
+  apiId               String?   @map("api_id")
+  teamId              String?   @map("team_id")
+  milestoneId         String?   @map("milestone_id")
+  name                String
+  method              String    @default("GET")
+  path                String    @default("/")
+  headers             String    @default("{}") // JSON
+  body                String?
+  expectedStatus      Int       @default(200) @map("expected_status")
+  lastStatus          Int?      @map("last_status")
+  lastDurationMs      Int?      @map("last_duration_ms")
+  lastRunAt           DateTime? @map("last_run_at")
+  lastResponse        String?   @map("last_response")
+  consecutiveFailures Int       @default(0) @map("consecutive_failures")
+  createdAt           DateTime  @default(now()) @map("created_at")
+
+  api       ExternalApi? @relation(fields: [apiId], references: [id], onDelete: Cascade)
+  team      Team?       @relation(fields: [teamId], references: [id])
+  milestone Milestone?  @relation(fields: [milestoneId], references: [id])
+
+  @@map("api_test_cases")
+}
+
+model ActivityEvent {
+  id          String   @id @default(cuid())
+  teamId      String?  @map("team_id")
+  challengeId String?  @map("challenge_id")
+  actorName   String   @map("actor_name")
+  action      String // e.g. milestone.update, artefact.upload, agent.action
+  summary     String
+  meta        String   @default("{}") // JSON
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  @@map("activity_events")
+}
